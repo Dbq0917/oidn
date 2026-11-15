@@ -1938,6 +1938,41 @@ project has to be rebuilt with OpenImageIO support enabled.
 Running `oidnDenoise` without any arguments or the `-h` argument will
 bring up a list of command-line options.
 
+### Adaptive Denoise Strength
+
+A single, fixed denoise strength cannot handle the non-uniform noise of
+Monte Carlo renderings: low-SNR dark regions tend to get over-blurred,
+while high-SNR bright regions still retain visible grain. Increasing the
+render sample count is not always an option. The adaptive pass addresses
+this without any extra samples by blending the denoised network output
+with the original noisy input on a per-pixel basis:
+
+    result = lerp(input, denoised, strength(x))
+
+`strength` in `[0,1]` is 0 (keep the noisy input, preserve detail) in the
+darkest regions and ramps up to 1 (fully accept the denoised output,
+suppress residual grain) in the brightest regions. The strength is driven
+by the luminance of the denoised signal through a configurable generalized
+smoothstep, or by an external per-pixel strength map.
+
+Enable it with `--adaptive` and optionally tune the response:
+
+    oidnDenoise --hdr noisy.pfm -o out.pfm --adaptive \
+                --strength 0.35 1.0 --lum 0.05 2.0 --exponent 2.0
+
+- `--strength min max`: denoise strength applied to the darkest and
+  brightest pixels respectively (both in `[0,1]`, `min <= max`).
+- `--lum shadow highlight`: luminance range (in the working/linear scale)
+  over which the strength ramps from `min` to `max`.
+- `--exponent e`: ramp shape; 1 is linear, larger values denoise a wider
+  share of the image.
+- `--strength_map map.pfm`: provide a single-channel `[0,1]` strength map
+  that overrides the automatic luminance-based strength.
+
+The pass runs on the host after the network, supports `float32` and
+`float16` images, and is incompatible with `--inplace` (the original input
+must remain available for blending).
+
 ## oidnBenchmark
 
 `oidnBenchmark` is a basic command-line benchmarking application for

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/common.h"
+#include "common/adaptive_denoise.h"
 #include "common/timer.h"
 #include "utils/arg_parser.h"
 #include "utils/image_io.h"
@@ -27,6 +28,8 @@ void printUsage()
             << "                   [--hdr color.pfm] [--ldr color.pfm] [--srgb] [--dir directional.pfm]" << std::endl
             << "                   [--alb albedo.pfm] [--nrm normal.pfm] [--clean_aux]" << std::endl
             << "                   [--is/--input_scale value]" << std::endl
+            << "                   [--adaptive] [--strength min max] [--lum shadow highlight]" << std::endl
+            << "                   [--exponent e] [--strength_map map.pfm]" << std::endl
             << "                   [-o/--output output.pfm]" << std::endl
             << "                   [-r/--ref reference_output.pfm] [--maxerror e]" << std::endl
             << "                   [-t/--type float|half]" << std::endl
@@ -94,6 +97,11 @@ int main(int argc, char* argv[])
   bool inplace = false;
   double errorThreshold = -1;
   int verbose = -1;
+
+  // Adaptive per-pixel strength (luminance-driven blend of input and output)
+  bool adaptive = false;
+  AdaptiveDenoiseParams adaptiveParams;
+  std::string strengthMapFilename;
 
   // Parse the arguments
   if (argc == 1)
@@ -183,6 +191,25 @@ int main(int argc, char* argv[])
         maxMemoryMB = args.getNextValue<int>();
       else if (opt == "inplace")
         inplace = true;
+      else if (opt == "adaptive")
+        adaptive = true;
+      else if (opt == "strength")
+      {
+        adaptiveParams.strengthMin = args.getNextValue<float>();
+        adaptiveParams.strengthMax = args.getNextValue<float>();
+      }
+      else if (opt == "lum")
+      {
+        adaptiveParams.shadowLum = args.getNextValue<float>();
+        adaptiveParams.highlightLum = args.getNextValue<float>();
+      }
+      else if (opt == "exponent")
+        adaptiveParams.exponent = args.getNextValue<float>();
+      else if (opt == "strength_map" || opt == "strength-map" || opt == "strengthMap")
+      {
+        strengthMapFilename = args.getNextValue();
+        adaptive = true;
+      }
       else if (opt == "buffer")
       {
         const auto val = toLower(args.getNextValue());
@@ -458,6 +485,43 @@ int main(int argc, char* argv[])
     {
       filter.setProgressMonitorFunction(nullptr);
       signal(SIGINT, SIG_DFL);
+    }
+
+    if (adaptive)
+    {
+      if (!adaptiveParams.validate())
+        throw std::runtime_error("invalid adaptive denoise parameters");
+
+      // In-place filtering overwrites the input, which is required as the
+      // noisy source of the blend, so it is incompatible with this pass.
+      if (inplace)
+        throw std::runtime_error("adaptive denoising requires a separate output (disable --inplace)");
+
+      std::vector<float> strengthMap;
+      if (!strengthMapFilename.empty())
+      {
+        auto map = loadImage(device, strengthMapFilename, DataType::Float32, Storage::Host);
+        if (map->getW() != width || map->getH() != height)
+          throw std::runtime_error("strength map dimensions do not match the input image");
+        const size_t pixelCount = width * height;
+        strengthMap.resize(pixelCount);
+        const size_t mapC = map->getC();
+        for (size_t i = 0; i < pixelCount; ++i)
+          strengthMap[i] = map->get(i * mapC); // use the first channel
+      }
+
+      std::cout << "Applying adaptive strength"
+                << " (min=" << adaptiveParams.strengthMin
+                << ", max=" << adaptiveParams.strengthMax
+                << ", shadowLum=" << adaptiveParams.shadowLum
+                << ", highlightLum=" << adaptiveParams.highlightLum
+                << ", exponent=" << adaptiveParams.exponent << ")" << std::endl;
+
+      const size_t elementSize = (output->getDataType() == DataType::Float16) ? 2 : 4;
+      adaptiveDenoiseBlend(output->getHostData(), input->getHostData(),
+                           width, height, input->getC(), elementSize,
+                           adaptiveParams,
+                           strengthMap.empty() ? nullptr : strengthMap.data());
     }
 
     if (!outputFilename.empty())

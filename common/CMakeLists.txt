@@ -32,6 +32,8 @@ add_library(OpenImageDenoise_common OBJECT
   ${PROJECT_SOURCE_DIR}/include/OpenImageDenoise/oidn.hpp
   common.h
   common.cpp
+  adaptive_denoise.h
+  adaptive_denoise.cpp
   half.h
   half.cpp
   oidn_utils.h

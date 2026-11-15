@@ -1,6 +1,15 @@
 Version History
 ---------------
 
+### Changes in development:
+
+-   Added an optional adaptive denoise strength pass to `oidnDenoise`
+    (`--adaptive`) that blends the denoised output with the original noisy
+    input per pixel based on luminance, preserving detail in dark regions while
+    suppressing residual grain in bright regions, without increasing the render
+    sample count. Supports `float32`/`float16` images and an optional external
+    per-pixel strength map (`--strength_map`)
+
 ### Changes in v2.5.1:
 
 -   Fixed integer overflows which could cause out-of-bounds reads or writes
